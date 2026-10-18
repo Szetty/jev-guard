@@ -1,5 +1,5 @@
 // The two checks every adapter shares. Code owns the policy; Jev answers narrow questions.
-import { ask } from "./jev.js";
+import { ask, readConfig } from "./jev.js";
 import { agentPermissions, shellCommand } from "./permissions.js";
 
 export const SCAN_QUESTIONS = {
@@ -117,6 +117,15 @@ export const ACTION_QUESTIONS_WITH_SETTINGS = {
     " Permission rules in context.agent_permissions do not change this answer." },
 };
 
+/** Opt-in: JEV_GUARD_READ_PERMISSIONS=1 (env wins, "0" turns it off) or "readPermissions": true in ~/.jev-guard/config.json,
+ *  which GUI hosts that never see your shell profile read too. Off by default: settings files, including ones checked
+ *  into a repository you cloned, can then lower Jev's risk for the commands they allow. */
+export function readPermissionsEnabled(env = process.env) {
+  const v = env.JEV_GUARD_READ_PERMISSIONS;
+  if (v !== undefined && v !== "") return /^(1|true|yes|on)$/i.test(String(v).trim());
+  return readConfig(env).readPermissions === true;
+}
+
 // Tools whose calls are never worth a Jev round-trip (read-only), and whose results are never external content.
 // Names as each agent reports them: Claude/Codex/Copilot (Read, Bash…), pi/OpenCode (read, bash, list…), Gemini/agy (view_file, search_web, read_file…), Cursor (Shell, Delete, MCP:x).
 const READ_ONLY = new Set(["read", "glob", "grep", "ls", "list", "find", "webfetch", "websearch", "todowrite", "todoread", "askuserquestion", "exitplanmode",
@@ -158,7 +167,7 @@ export async function assessAction({ tool, input, cwd, agent, context }, opts = 
   if (READ_ONLY.has(name) || list(env.JEV_GUARD_SKIP_TOOLS).has(name)) return null;
   const command = shellCommand(tool, input);
   let permissions;
-  if (!env.JEV_GUARD_NO_SETTINGS) {
+  if (readPermissionsEnabled(env)) {
     try { permissions = agentPermissions({ agent, tool, input, cwd }, opts.home ? { home: opts.home } : {}); } catch { permissions = undefined; }
   }
   const ctx = permissions ? { ...(context ?? {}), agent_permissions: permissions } : context;

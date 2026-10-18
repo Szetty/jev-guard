@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentPermissions, shellCommand, splitArgs, projectDirs } from "../src/permissions.js";
-import { assessAction, ACTION_QUESTIONS, ACTION_QUESTIONS_WITH_SETTINGS } from "../src/guard.js";
+import { assessAction, readPermissionsEnabled, ACTION_QUESTIONS, ACTION_QUESTIONS_WITH_SETTINGS } from "../src/guard.js";
 
 // A fake home and a fake project (a git repo with a subdirectory), filled per test.
 function sandbox(files) {
@@ -132,7 +132,19 @@ test("malformed files contribute nothing and never throw", () => {
   assert.equal(perms(box, undefined, "ls"), undefined);
 });
 
-test("assessAction sends the command and agent_permissions to Jev; JEV_GUARD_NO_SETTINGS turns it off", async () => {
+test("readPermissionsEnabled: off by default, env wins, config file opts in", () => {
+  const dir = mkdtempSync(join(tmpdir(), "jev-cfg-"));
+  const on = join(dir, "on.json"), off = join(dir, "off.json");
+  writeFileSync(on, JSON.stringify({ readPermissions: true }));
+  writeFileSync(off, JSON.stringify({}));
+  assert.equal(readPermissionsEnabled({ JEV_GUARD_CONFIG: off }), false);
+  assert.equal(readPermissionsEnabled({ JEV_GUARD_CONFIG: join(dir, "missing.json") }), false);
+  assert.equal(readPermissionsEnabled({ JEV_GUARD_CONFIG: on }), true);
+  assert.equal(readPermissionsEnabled({ JEV_GUARD_CONFIG: off, JEV_GUARD_READ_PERMISSIONS: "1" }), true);
+  assert.equal(readPermissionsEnabled({ JEV_GUARD_CONFIG: on, JEV_GUARD_READ_PERMISSIONS: "0" }), false);
+});
+
+test("assessAction sends the command and agent_permissions to Jev only when opted in", async () => {
   const box = sandbox({ "opencode.json": { permission: { bash: { "*": "ask", "bin/k8s/debian_upgrade.sh *": "allow" } } } });
   const sent = [];
   const fetchImpl = async (_url, { body }) => {
@@ -142,17 +154,17 @@ test("assessAction sends the command and agent_permissions to Jev; JEV_GUARD_NO_
     return { ok: true, json: async () => ({ answers }) };
   };
   const call = { tool: "bash", input: { command: "bin/k8s/debian_upgrade.sh worker-31 drain" }, cwd: box.repo, agent: "opencode" };
-  const r = await assessAction(call, { env: { JEV_API_KEY: "t" }, fetchImpl, home: box.home });
+  const r = await assessAction(call, { env: { JEV_API_KEY: "t", JEV_GUARD_READ_PERMISSIONS: "1" }, fetchImpl, home: box.home });
   assert.equal(sent[0].command, "bin/k8s/debian_upgrade.sh worker-31 drain");
   assert.equal(sent[0].context.agent_permissions.effective.opencode, "allow");
   assert.match(r.message, /settings: opencode allow/);
-  await assessAction(call, { env: { JEV_API_KEY: "t", JEV_GUARD_NO_SETTINGS: "1" }, fetchImpl, home: box.home });
+  await assessAction(call, { env: { JEV_API_KEY: "t", JEV_GUARD_CONFIG: join(box.home, "none.json") }, fetchImpl, home: box.home });  // default: off
   assert.equal(sent[1].context, undefined);
   assert.equal(sent[1].command, "bin/k8s/debian_upgrade.sh worker-31 drain");
   // the settings wording goes only with a matching specific rule; every other call gets the upstream questions untouched
   assert.deepEqual(sent[0].questions, ACTION_QUESTIONS_WITH_SETTINGS);
   assert.deepEqual(sent[1].questions, ACTION_QUESTIONS);
-  await assessAction({ ...call, input: { command: "kubectl delete node w" } }, { env: { JEV_API_KEY: "t" }, fetchImpl, home: box.home });
+  await assessAction({ ...call, input: { command: "kubectl delete node w" } }, { env: { JEV_API_KEY: "t", JEV_GUARD_READ_PERMISSIONS: "1" }, fetchImpl, home: box.home });
   assert.equal(sent[2].context, undefined);  // only the broad "*": "ask" covers it
   assert.deepEqual(sent[2].questions, ACTION_QUESTIONS);
 });
