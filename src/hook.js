@@ -29,6 +29,8 @@ function resolveEvent(explicitEvent, input = {}) {
   );
 }
 
+const GEMINI_EVENTS = new Set(["BeforeTool", "AfterTool", "BeforeAgent"]);
+
 export async function handleHook(input, { agent, env = process.env, fetchImpl, event: explicitEvent } = {}) {
   agent ??= detectAgent(input);
   const opts = { env, fetchImpl };
@@ -39,7 +41,9 @@ export async function handleHook(input, { agent, env = process.env, fetchImpl, e
   const ctxOf = (intent) => buildContext({ sessionId, transcriptPath: input.transcript_path ?? input.transcriptPath, intent });
 
   const assess = async (tool, toolInput, intent) => {
-    const r = await assessAction({ tool, input: toolInput, cwd, agent, context: ctxOf(intent) }, opts);
+    // Whose permission settings apply: Gemini and Cursor arrive Claude-shaped as far as detectAgent goes.
+    const settingsAgent = cursor ? "cursor" : GEMINI_EVENTS.has(event) ? "gemini" : agent;
+    const r = await assessAction({ tool, input: toolInput, cwd, agent: settingsAgent, context: ctxOf(intent) }, opts);
     if (r) remember(sessionId, "calls", { tool, preview: preview(toolInput, 100), level: r.level });
     return r;
   };

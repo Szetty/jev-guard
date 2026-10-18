@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Action calls carry the shell command (`state.command`) and, when a specific rule in the calling agent's own permission settings covers the call, those rules (`context.agent_permissions`): Claude Code, OpenCode, Codex, Cursor CLI and Gemini CLI. Only then do the questions get settings-aware instructions: a specific allow rule is standing approval and caps risk at "hard to undo" unless the call is destructive. Chained commands are covered only if every part is; substitutions never are; broad rules are ignored. `JEV_GUARD_NO_SETTINGS=1` turns it off (`src/permissions.js`).
 - Files under `.claude/`, `.codex/`, `.gemini/` or `.cursor/` `docs/` and `reference/` count as instruction files (#1).
 - OpenCode/Kilo: `skill` results are checked as instruction files, not as untrusted content (#2).
 - `Task`/`Agent` results are scanned for injection; out-of-range thresholds fall back to their defaults (#3).

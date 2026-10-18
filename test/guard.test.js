@@ -5,7 +5,7 @@ import { decide, collectText, truncate, assessAction, scanContent } from "../src
 import { handleHook } from "../src/hook.js";
 import { runProxy } from "../src/acp.js";
 
-const env = { JEV_API_KEY: "test" };
+const env = { JEV_API_KEY: "test", JEV_GUARD_NO_SETTINGS: "1" };  // hermetic: never read the real ~/.claude etc.
 
 // Fake Jev: answers keyed off the state, in TypeSafe's response shape.
 async function fetchImpl(_url, { body }) {

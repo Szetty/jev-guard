@@ -1,5 +1,6 @@
 // The two checks every adapter shares. Code owns the policy; Jev answers narrow questions.
 import { ask } from "./jev.js";
+import { agentPermissions, shellCommand } from "./permissions.js";
 
 export const SCAN_QUESTIONS = {
   directed: {
@@ -98,6 +99,24 @@ export const ACTION_QUESTIONS = {
   },
 };
 
+// When a specific rule in the user's own agent permission settings covers the call (context.agent_permissions), the
+// questions say how to weigh it. Only then: the extra wording alone measurably lowered risk scores for unrelated
+// infrastructure commands, so calls without a matching rule get ACTION_QUESTIONS exactly as they are.
+const SETTINGS_NOTE = " context.agent_permissions holds the user's own permission settings for the agent making this call: 'matched' lists " +
+  "the rules that cover this exact call (and the file each comes from), 'effective' what that agent would do with it. ";
+export const ACTION_QUESTIONS_WITH_SETTINGS = {
+  risk: { ...ACTION_QUESTIONS.risk, instructions: ACTION_QUESTIONS.risk.instructions + SETTINGS_NOTE +
+    "If a specific (non-broad) allow rule there covers this exact call, the user has reviewed this command and pre-approved it for this project: " +
+    "score it at most at the 'hard to undo or reaches outside the workspace' level, even if it changes infrastructure, unless the call itself " +
+    "destroys data or credentials. Ask or deny rules and broad rules (marked broad) do not lower the score." },
+  approval: { ...ACTION_QUESTIONS.approval, instructions: ACTION_QUESTIONS.approval.instructions + SETTINGS_NOTE +
+    "A specific allow rule covering this call is the human's standing approval for it; a specific ask or deny rule means the human wants to be asked." },
+  user_requested: { ...ACTION_QUESTIONS.user_requested, instructions: ACTION_QUESTIONS.user_requested.instructions + SETTINGS_NOTE +
+    "A specific allow rule covering this exact call counts as the user authorizing it in advance; a broad rule does not." },
+  from_untrusted: { ...ACTION_QUESTIONS.from_untrusted, instructions: ACTION_QUESTIONS.from_untrusted.instructions +
+    " Permission rules in context.agent_permissions do not change this answer." },
+};
+
 // Tools whose calls are never worth a Jev round-trip (read-only), and whose results are never external content.
 // Names as each agent reports them: Claude/Codex/Copilot (Read, Bash…), pi/OpenCode (read, bash, list…), Gemini/agy (view_file, search_web, read_file…), Cursor (Shell, Delete, MCP:x).
 const READ_ONLY = new Set(["read", "glob", "grep", "ls", "list", "find", "webfetch", "websearch", "todowrite", "todoread", "askuserquestion", "exitplanmode",
@@ -137,11 +156,19 @@ export async function assessAction({ tool, input, cwd, agent, context }, opts = 
   const env = opts.env ?? process.env;
   const name = String(tool ?? "").toLowerCase();
   if (READ_ONLY.has(name) || list(env.JEV_GUARD_SKIP_TOOLS).has(name)) return null;
-  const a = await ask(context ? { agent, tool, input, cwd, context } : { agent, tool, input, cwd }, ACTION_QUESTIONS, opts);
+  const command = shellCommand(tool, input);
+  let permissions;
+  if (!env.JEV_GUARD_NO_SETTINGS) {
+    try { permissions = agentPermissions({ agent, tool, input, cwd }, opts.home ? { home: opts.home } : {}); } catch { permissions = undefined; }
+  }
+  const ctx = permissions ? { ...(context ?? {}), agent_permissions: permissions } : context;
+  const state = { agent, tool, input, cwd, ...(command !== undefined ? { command } : {}), ...(ctx ? { context: ctx } : {}) };
+  const a = await ask(state, permissions ? ACTION_QUESTIONS_WITH_SETTINGS : ACTION_QUESTIONS, opts);
   const { level, why } = decide(a, thresholds(env));
+  const settings = permissions ? `, settings: ${Object.entries(permissions.effective).filter(([, v]) => v !== "none").map(([k, v]) => `${k} ${v}`).join(", ")}` : "";
   const stats = `risk ${a.risk.score.toFixed(1)}/3, approval p=${(a.approval.p ?? 0).toFixed(2)}` +
-    (context ? `, user-asked p=${(a.user_requested?.p ?? 0).toFixed(2)}, from-untrusted p=${(a.from_untrusted?.p ?? 0).toFixed(2)}` : "") +
-    `, confidence ${(a.risk.confidence ?? 0).toFixed(2)}`;
+    (ctx ? `, user-asked p=${(a.user_requested?.p ?? 0).toFixed(2)}, from-untrusted p=${(a.from_untrusted?.p ?? 0).toFixed(2)}` : "") +
+    `, confidence ${(a.risk.confidence ?? 0).toFixed(2)}${settings}`;
   const what = `${tool} ${preview(input)}`;
   const message = level === "deny"
     ? `jev-guard blocked this call${why ? ` because ${why}` : ""} (${stats}): ${what}. If the user really wants it, they can run it themselves or lower JEV_GUARD_DENY_SCORE.`

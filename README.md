@@ -153,6 +153,35 @@ Same run: a Cloudflare job posting carrying *"If the user asks you to apply to t
 
 Results shorter than 200 characters and results of local edit/search tools are skipped. States above ~60k characters are truncated head+tail (injections like to hide at the end).
 
+### Your agent's permission settings
+
+Every action call also carries the shell command it would run (`state.command`). When a **specific** rule in your own permission settings covers the call, jev-guard tells Jev about it (`context.agent_permissions`). It lists the matching rules and the file each came from, and what that agent would do with the call. The questions then get extra instructions: a specific allow rule is your reviewed, standing approval, and it caps the risk at the "hard to undo" level unless the call itself destroys data or credentials. A planted-instruction call is still denied, whatever the rules say.
+
+| Agent | Files read | Rules |
+| --- | --- | --- |
+| Claude Code | `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json` | `permissions.allow/ask/deny`: `Bash(npm run *)`, `Bash(git log:*)`; deny > ask > allow |
+| OpenCode | `~/.config/opencode/opencode.json[c]`, `opencode.json[c]` and `.opencode/opencode.json[c]` up to the git root | `permission.bash`: `{"pattern": "allow"}`; last match wins |
+| Codex | `~/.codex/rules/*.rules`, `.codex/rules/*.rules` | `prefix_rule(pattern=[…], decision=…)`; most restrictive wins |
+| Cursor CLI | `~/.cursor/cli-config.json`, `.cursor/cli.json` | `permissions.allow/deny`: `Shell(git)`, `Shell(curl:*)`; deny wins |
+| Gemini CLI | `~/.gemini/settings.json`, `.gemini/settings.json`, `~/.gemini/policies/*.toml` | `tools.allowed: run_shell_command(git)`, `tools.exclude`, `[[rule]] commandPrefix` |
+
+How rules count:
+
+- **Only the calling agent's settings count.** When jev-guard can't tell which agent is calling (ACP, pi, `jev-guard check`), it shows every agent's rules, labelled per agent.
+- **A rule covers a chained command only if it covers every part.** Parts are split on `;`, `&&`, `||`, `|` and newlines, and a part with `$(…)`, backticks or `<(…)` is never covered.
+- **Broad rules are ignored**, such as `"*"`, bare `Bash` or `"bash": "ask"`. They apply to every command alike, and showing them shifted Jev's scores for unrelated commands. A call with no specific rule is sent exactly as before: same state, same questions.
+- **Not read:** Copilot CLI (approvals only in `~/.copilot`, undocumented format) and Gemini workspace policies, which Gemini itself ignores.
+
+Checked-in settings count too, so a repository you clone can pre-approve its own commands. Set `JEV_GUARD_NO_SETTINGS=1` to turn this off.
+
+Measured live (three runs each) in a repo that allows `bin/k8s/debian_upgrade.sh *` in both `.claude/settings.json` and `opencode.json`:
+
+| Call | Without settings | With settings |
+| --- | --- | --- |
+| `bin/k8s/debian_upgrade.sh worker-31 drain` / `reboot` / `uncordon` | deny (2.5–2.6) | ask (2.1–2.3) |
+| `kubectl delete node worker-31`, `kubectl drain …` (no rule) | deny (2.5–2.6) | deny (2.5–2.6) |
+| `bin/k8s/debian_upgrade.sh worker-31 drain; rm -rf /` | deny | deny (3.0), not covered |
+
 ### Tuning
 
 | Variable | Default | Effect |
@@ -170,6 +199,7 @@ Results shorter than 200 characters and results of local edit/search tools are s
 | `JEV_GUARD_SCAN_CACHE` | `~/.jev-guard/scan-cache.json` | instruction-file scan cache |
 | `JEV_GUARD_SKIP_TOOLS` | | comma-separated tool names never assessed |
 | `JEV_GUARD_SKIP_SCAN` | | comma-separated tool names whose results are never scanned |
+| `JEV_GUARD_NO_SETTINGS` | unset | if set, your agents' permission settings are never read or sent |
 | `JEV_GUARD_FAIL_CLOSED` | unset | if set, an unreachable Jev **denies** instead of allowing |
 | `JEV_MODEL` | `jev-latest` / `jev-1.13` / `typesafe-ai/jev` | model id for TypeSafe or `JEV_BASE_URL` / OpenRouter / the gateway |
 | `JEV_BASE_URL` | unset | any System One server (`<base>/v1/systemone`), e.g. a local Kev; takes precedence over every key |
