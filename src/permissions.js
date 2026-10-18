@@ -28,6 +28,9 @@ const SHELL_TOOLS = new Set(["bash", "shell", "run_shell_command", "run_terminal
 const MAX_CONFIGURED = 20;
 // Command substitution or process substitution can run a second command inside one that looks allowed.
 const HIDDEN_COMMAND = /\$\(|`|<\(|>\(/;
+// echo/printf/true/false/: with no redirection and no substitution only print or set an exit code.
+const NEUTRAL = /^(echo|printf|true|false|:)(\s|$)/;
+const isNeutral = (part) => NEUTRAL.test(part) && !/[<>]/.test(part.replace(/"[^"]*"|'[^']*'/g, "")) && !HIDDEN_COMMAND.test(part);
 const MAX_RULE = 160;
 
 /** The shell command a tool call would run, or undefined for non-shell calls. */
@@ -61,7 +64,9 @@ export function agentPermissions({ agent, tool, input, cwd }, { home = homedir()
     if (!relevant.length) continue;
     // A rule covers a chained command only if it covers every part ("a && b", "a; b", "a | b"), as Claude Code and Codex do.
     const parts = command !== undefined ? splitCompound(command) : [];
-    const hits = relevant.filter((r) => (command !== undefined ? parts.length > 0 && parts.every((c) => !HIDDEN_COMMAND.test(c) && r.match(c)) : true));
+    // Output-only parts (`; echo "EXIT=$?"`, `&& true`) neither need a rule nor stop one from covering the call.
+    const active = parts.filter((c) => !isNeutral(c));
+    const hits = relevant.filter((r) => (command !== undefined ? active.length > 0 && active.every((c) => !HIDDEN_COMMAND.test(c) && r.match(c)) : true));
     effective[a] = combine(a, hits);
     for (const r of hits) matched.push({ agent: a, rule: clip(r.rule), decision: r.decision, broad: r.broad, file: tilde(r.file, home) });
     for (const r of relevant) configured.push(`${a}: ${r.decision} ${clip(r.rule)}${r.broad ? " (broad)" : ""} [${tilde(r.file, home)}]`);
